@@ -1,3 +1,7 @@
+"""
+Class used as an interface to computes path between a starting and an ending location using an RTT based algorithm
+"""
+
 import copy
 import json
 import time
@@ -7,9 +11,18 @@ from scipy import interpolate"""
 
 from . rtt_base import *
 
-class PathPlanner():
+class PathPlanner:
 
     def __init__(self, map_uri, biais=9, dmax=30, obstacle_growth=7):
+        """
+        Initialize the PathPlanner class
+        :Args:
+            | map_uri: uri to the json file location containing map data (String)
+            | biais: 1/biais is the % of biais wanted. i.e the % of nodes created towards the goal to accelerate the search
+            | dmax: maximun accepted distance between two nodes (int)
+            | obstacle_growth: the number of points by which to increase the size of the obstacles, so the path is not
+            close to the walls (int)
+        """
 
         self.map_uri = map_uri
         self.biais = biais
@@ -21,6 +34,15 @@ class PathPlanner():
 
 
     def path_planner(self, start=(50, 380), goal=(380, 50)):
+        """
+        Computes a path between a starting point and an ending point
+        :Args:
+            | start: tuples coordinates of the starting point (int, int)
+            | goal: tuples coordinates of the ending point (int, int)
+        :Return:
+            | return: an array of the location on the path between the start location and the goal location,
+            starting from the start location ([(x,y), ...])
+        """
 
         graph = RRTGraph(start, goal, self.map_data, self.dimensions[0], self.dimensions[1])
 
@@ -31,7 +53,7 @@ class PathPlanner():
 
             # timeout
             elapsed = time.time() - t1
-            if elapsed > 4:
+            if elapsed > 2:
                 raise
 
             if iteration % self.biais == 0:
@@ -40,7 +62,7 @@ class PathPlanner():
                 graph.expand(self.dmax)
             iteration += 1
 
-        return graph.getPathCoords()
+        return graph.get_path_coords()
 
 
     """def basic_smoothing(self, path):
@@ -66,6 +88,12 @@ class PathPlanner():
 
 
     def grow_map(self, factor):
+        """
+        Increase the size of the obstacles, so the robot's path is not close to the walls
+        :Args:
+            | factor: the number of points by which to increase the size of the obstacles, so the path is not
+            close to the walls (int)
+        """
 
         size_x = len(self.map_data[0])
         size_y = len(self.map_data)
