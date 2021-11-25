@@ -10,7 +10,7 @@ from . util import rotateQuaternion, getHeading
 from random import random, gauss
 import time, statistics
 
-from . path_planning import path_planner
+
 
 
 class PFLocaliser(PFLocaliserBase):
@@ -23,16 +23,6 @@ class PFLocaliser(PFLocaliserBase):
         # ----- Set motion model parameters
         # ----- Sensor model parameters
         self.NUMBER_PREDICTED_READINGS = 20     # Number of readings to predict
-
-        absolute_path = os.path.abspath(__file__)
-        path_finder = path_planner.PathPlanner(os.path.dirname(absolute_path) + "/path_planning/map_data_2d")
-        result = False
-        while not result:
-            try:
-                print(path_finder.path_planner())
-                result = True
-            except:
-                result = False
 
 
     def init_random_pose(self, mean_pose, sig):

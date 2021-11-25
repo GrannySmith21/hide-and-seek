@@ -61,7 +61,7 @@ class PathPlanner:
             else:
                 graph.expand(self.dmax)
             iteration += 1
-
+    
         return graph.get_path_coords()
 
 
