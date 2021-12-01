@@ -59,7 +59,7 @@ class PFLocaliser(PFLocaliserBase):
             | (geometry_msgs.msg.PoseArray) poses of the particles
         """
         N = self.number_of_particles #number of particles
-        sig =1  # sigma of noise gaussian
+        sig =0.5  # sigma of noise gaussian
         pose_array = PoseArray()
         for i in range(N):
             pose_array.poses.append(self.init_random_pose(initialpose.pose.pose, sig))
