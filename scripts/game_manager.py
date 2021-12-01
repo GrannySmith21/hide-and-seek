@@ -79,7 +79,11 @@ class GameManager():
         self.no_of_players
     def run(self):
         for robot in self.hiders_list:
-            robot.begin(Pose())
+            p = Pose()
+            x,y = 23, 7
+            p.position.x = x
+            p.position.y = y
+            robot.begin(p)
             print(robot)
         # subscribe to all robots
 

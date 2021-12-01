@@ -11,6 +11,6 @@ def generate_path(start,end):
             #print("here")
             return path_finder.path_planner(start, end)
         except:
-            print("searching solution..")
+            continue #print("searching solution..")
 
 
