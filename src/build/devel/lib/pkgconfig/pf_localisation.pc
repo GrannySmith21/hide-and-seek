@@ -1,8 +1,0 @@
-prefix=/opt/ros/noetic/share/hideseek/build/devel
-
-Name: pf_localisation
-Description: Description of pf_localisation
-Version: 0.0.0
-Cflags: 
-Libs: -L${prefix}/lib 
-Requires: 
