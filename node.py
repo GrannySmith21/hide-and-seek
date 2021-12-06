@@ -19,11 +19,9 @@ from geometry_msgs.msg import (PoseStamped, PoseWithCovarianceStamped,
 from tf.msg import tfMessage
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, Odometry
-from sensor_msgs.msg import Image
+
 from threading import Lock
-from cv_bridge import CvBridge
-import cv2
-import numpy as np
+
 import sys
 from copy import deepcopy
 
@@ -55,8 +53,7 @@ class RobotNode(object):
             goal - sets "goal" of path finder to this value
     """
     def __init__(self, ID,ocuccupancy_map, **kwargs):
-        self.ID = ID
-        self.is_seeker = False
+        self.id = ID
         if "goal" in kwargs.keys():
             self.goal = kwargs['goal']
             self.hider = True
@@ -90,6 +87,7 @@ class RobotNode(object):
                       (ocuccupancy_map.info.width, ocuccupancy_map.info.height,
                        ocuccupancy_map.info.resolution))
         self._particle_filter.set_map(ocuccupancy_map)
+        
         self._laser_subscriber = rospy.Subscriber(f"/robot_{ID}/base_scan", LaserScan,
                                                   self._laser_callback,
                                                   queue_size=1)
@@ -99,10 +97,6 @@ class RobotNode(object):
         self._odometry_subscriber = rospy.Subscriber(f"/robot_{ID}/odom", Odometry,
                                                      self._odometry_callback,
                                                      queue_size=1)
-    def start_seeker(self, locations):
-        self._seeker_camera_subscriber = rospy.Subscriber(f'/robot_{ID}/image',Image, self._camera_callback, queue_size=1)
-        self.is_seeker = True
-        self.goals = locations
     """ initial pose callback function
     handles callback for initial pose subscriber
     """
@@ -112,11 +106,11 @@ class RobotNode(object):
         self._last_published_pose = deepcopy(self._particle_filter.estimatedpose)
         self._initial_pose_received = True
         self._cloud_publisher.publish(self._particle_filter.particlecloud)
-    
+
     """ odometry callback function
     handles callback for odometry
 
-    Also where path finding + path following algorithms are called
+    also where path finding + path following algorithms are called
     """
     def _odometry_callback(self, odometry):
         """
@@ -124,12 +118,10 @@ class RobotNode(object):
         a filter predict step with odeometry followed by an update step using
         the latest laser, and attempt path finding/ path following
         """
+
         if self._initial_pose_received:
             pose = self._particle_filter.estimatedpose.pose.pose
-            if self.is_seeker:
-                if len(self.path) == 0:
-                    self.set_path(self.goals.pop(0))
-                    
+                
             # path is a stack of nodes that the robot will attempt to reach. When no nodes are left in path, 
             # robot has reached destination
             if len(self.path) > 0:
@@ -145,12 +137,15 @@ class RobotNode(object):
                     self.public_path()
                     # if we have reached target, publish on rostopic
                     if len(self.path) == 0:
-                        self._robot_status.publish(f"{self.ID};arrived")
+                        self._robot_status.publish(f"{self.id};arrived")
 
             # odometry code 
             t_odom = self._particle_filter.predict_from_odometry(odometry)
             t_filter = self._particle_filter.update_filter(self._latest_scan)
-            
+            if t_odom + t_filter > 0.1:
+                rospy.logwarn("Filter cycle overran timeslot")
+                rospy.loginfo("Odometry update: %fs"%t_odom)
+                rospy.loginfo("Particle update: %fs"%t_filter)
 
     """ set_path function
     args:
@@ -204,6 +199,7 @@ class RobotNode(object):
                 estimatedpose.pose = self._particle_filter.estimatedpose.pose.pose
                 estimatedpose.header.frame_id = "map"
                 self._pose_publisher.publish(estimatedpose)
+                
                 # ----- Update record of previously-published pose
                 self._last_published_pose = deepcopy(self._particle_filter.estimatedpose)
         
@@ -249,9 +245,9 @@ class RobotNode(object):
             # if thers not lots of space in front, or more space either side than in front, turning a bit will help
             if m < LARGE_SPACE or (r < m and l < m): 
                 if r < WALL_SPACE:
-                    self.angle = -1.57/2
-                elif l < WALL_SPACE:
                     self.angle = 1.57/2
+                elif l < WALL_SPACE:
+                    self.angle = -1.57/2
             else:
                 self.angle = 0
     """split
@@ -325,7 +321,7 @@ class RobotNode(object):
 
         # if we need to reverse, ignore any turn or movement towards node
         if self.reverse:
-            self.move_robot(-0.5 , self.angle)
+            self.move_robot(-1 , self.angle)
             return False
         # if we havent already arrived, we should then check if we need to turn
         if not arrived:
@@ -342,6 +338,7 @@ class RobotNode(object):
             return True
         # We havent arrived..
         return False
+    
     """convert_coords
     args:
         coords - tuple of coordinates in the 620 index coordinate system used in path finding
@@ -367,13 +364,7 @@ class RobotNode(object):
         map_l = 30.0
         c = coords_l/map_l
         return (round(c * x), round(c * y))
-    
-    def move_robot(self, vel, angle):
-        base_data = Twist()
-        base_data.linear.x = vel
-        base_data.angular.z = angle
-        self._movement_publisher.publish(base_data)
-     
+
     """ pointToTarget
     args: 
         angle - angle between position and desired location
@@ -394,86 +385,25 @@ class RobotNode(object):
         # adjust this angle to match same rotation system as "angle" parameter
         r = radian_z + math.pi
         # compute difference
-        angle = (angle+ (math.pi*2))%(math.pi*2)
-        
-        d = angle - r
-        other_d_abs = 2*math.pi - abs(d)
-        print(d,other_d_abs, r, angle)
-        if other_d_abs < abs(d):
-            if d < 0:
-                d = -other_d_abs
-            else:
-                d = other_d_abs
-
+        d = angle - radian_z
         approx_correct_angle = 0.4
-        
         if d < approx_correct_angle and d > -approx_correct_angle:
             return False, 0
+        # if large difference in angles, we should rotate proportional to 
+        
         return True, d
     def approximate_same_position(self, pose, coords):
-        noise = 0.2
+        noise = 0.1
         x, y = pose.position.x, pose.position.y
         d = math.dist([x, y], [coords[0],coords[1]])
         if d < noise:
             return True, 0
-        large_distance = 1
-        if large_distance < d:
-            print("fast")
-            return False, 3
         return False, d
-
-    def _camera_callback(self, ros_data):
-        #np_arr = np.fromstring(ros_data.data, np.uint8)
-        #image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-        rgb_image = CvBridge().imgmsg_to_cv2(ros_data, desired_encoding="passthrough")
-        ##image_np = cv2.cvtColor(np_arr, cv2.COLOR_GRAY2BGR)
-        ##image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        # load image
-        ##img = cv2.imread(image_np)
-        # Convert to HSV
-
-        hsv = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2HSV)
-        cv2.imwrite('Test_gray.jpg', rgb_image)
-
-        # define range wanted color in HSV
-        lower_val_red = np.array([0, 102, 0])
-        upper_val_red = np.array([52, 255, 255])
-
-        lower_val_purple = np.array([0, 188, 0])
-        upper_val_purple = np.array([156, 242, 255])
-
-        lower_val_green = np.array([52, 62, 0])
-        upper_val_green = np.array([110, 255, 255])
-
-        lower_val_blue = np.array([111, 50, 0])
-        upper_val_blue = np.array([130, 255, 255])
-
-        # Threshold the HSV image - any green color will show up as white
-        mask_red = cv2.inRange(hsv, lower_val_red, upper_val_red)
-        mask_purple = cv2.inRange(hsv, lower_val_purple, upper_val_purple)
-        mask_green = cv2.inRange(hsv, lower_val_green, upper_val_green)
-        mask_blue = cv2.inRange(hsv, lower_val_blue, upper_val_blue)
-        # if there are any white pixels on mask, sum will be > 0
-        hasred = np.sum(mask_red)
-        haspurple = np.sum(mask_purple)
-        hasgreen = np.sum(mask_green)
-        hasblue = np.sum(mask_blue)
-        found_str = "FOUND "
-        msg = lambda x: f"{self.ID}:{found_str}{x}"
-        if hasred > 0:
-            self._robot_status.publish(msg("red"))
-
-        if haspurple > 0:
-            self._robot_status.publish(msg("purple"))
-
-        if hasgreen > 0:
-            self._robot_status.publish(msg("green"))
-
-        if hasblue > 0:
-            self._robot_status.publish(msg("blue"))
-
-         
+    def move_robot(self, vel, angle):
+        base_data = Twist()
+        base_data.linear.x = vel
+        base_data.angular.z = angle
+        self._movement_publisher.publish(base_data)
 if __name__ == '__main__':
     # --- Main Program  ---
     rospy.init_node("robot")
