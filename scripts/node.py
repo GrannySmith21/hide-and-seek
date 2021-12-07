@@ -100,9 +100,10 @@ class RobotNode(object):
                                                      self._odometry_callback,
                                                      queue_size=1)
     def start_seeker(self, locations):
-        self._seeker_camera_subscriber = rospy.Subscriber(f'/robot_{ID}/image',Image, self._camera_callback, queue_size=1)
+        self._seeker_camera_subscriber = rospy.Subscriber(f'/robot_{self.ID}/image',Image, self._camera_callback, queue_size=1)
         self.is_seeker = True
         self.goals = locations
+        self.seeker_publisher = rospy.Publisher(f'/robot_{self.ID}/seeker', String)
     """ initial pose callback function
     handles callback for initial pose subscriber
     """
@@ -128,7 +129,11 @@ class RobotNode(object):
             pose = self._particle_filter.estimatedpose.pose.pose
             if self.is_seeker:
                 if len(self.path) == 0:
-                    self.set_path(self.goals.pop(0))
+                    if len(self.goals) > 0:
+                        self.set_path(self.goals.pop(0))
+                    else:
+                        print ("End of game")
+                        sys.exit(0)
                     
             # path is a stack of nodes that the robot will attempt to reach. When no nodes are left in path, 
             # robot has reached destination
@@ -232,7 +237,7 @@ class RobotNode(object):
         l,lm,m,rm,r = avg(l), avg(lm), avg(m), avg(rm), avg(r)
         # define some constants for what constitutes as "too close"
         LARGE_SPACE = 3
-        CLOSE_SPACE = 0.5
+        CLOSE_SPACE = 0.4
         WALL_SPACE = 0.5
 
         # reverse boolean, when true, will make robot reverse
@@ -246,12 +251,10 @@ class RobotNode(object):
             self.angle = 1.57
         # if we are continuing forward..
         if not self.reverse:
-            # if thers not lots of space in front, or more space either side than in front, turning a bit will help
-            if m < LARGE_SPACE or (r < m and l < m): 
-                if r < WALL_SPACE:
-                    self.angle = -1.57/2
-                elif l < WALL_SPACE:
-                    self.angle = 1.57/2
+            if r < WALL_SPACE:
+                self.angle = -1.57/4
+            elif l < WALL_SPACE:
+                self.angle = 1.57/4
             else:
                 self.angle = 0
     """split
@@ -286,7 +289,6 @@ class RobotNode(object):
                              getHeading(latest_rot))   # Rotate forward
         q = rotateQuaternion(q, -getHeading(prev_rot)) # Rotate backward
         heading_delta = abs(getHeading(q))
-        #rospy.loginfo("Moved by %f"%location_delta)
         return (location_delta > self._PUBLISH_DELTA or
                 heading_delta > self._PUBLISH_DELTA)
 
@@ -398,7 +400,8 @@ class RobotNode(object):
         
         d = angle - r
         other_d_abs = 2*math.pi - abs(d)
-        print(d,other_d_abs, r, angle)
+        if self.ID == 0:
+            print(d, other_d_abs, angle, r)
         if other_d_abs < abs(d):
             if d < 0:
                 d = -other_d_abs
@@ -418,15 +421,15 @@ class RobotNode(object):
             return True, 0
         large_distance = 1
         if large_distance < d:
-            print("fast")
             return False, 3
         return False, d
-
+    
     def _camera_callback(self, ros_data):
+        
         #np_arr = np.fromstring(ros_data.data, np.uint8)
         #image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-        rgb_image = CvBridge().imgmsg_to_cv2(ros_data, desired_encoding="passthrough")
+        rgb_image = CvBridge().imgmsg_to_cv2(ros_data, desired_encoding="bgr8")
         ##image_np = cv2.cvtColor(np_arr, cv2.COLOR_GRAY2BGR)
         ##image_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         # load image
@@ -434,14 +437,14 @@ class RobotNode(object):
         # Convert to HSV
 
         hsv = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2HSV)
-        cv2.imwrite('Test_gray.jpg', rgb_image)
+        # cv2.imwrite('Test_gray.jpg', rgb_image)
 
         # define range wanted color in HSV
         lower_val_red = np.array([0, 102, 0])
         upper_val_red = np.array([52, 255, 255])
 
-        lower_val_purple = np.array([0, 188, 0])
-        upper_val_purple = np.array([156, 242, 255])
+        lower_val_purple = np.array([131, 167, 68])
+        upper_val_purple = np.array([179, 224, 255])
 
         lower_val_green = np.array([52, 62, 0])
         upper_val_green = np.array([110, 255, 255])
@@ -460,19 +463,18 @@ class RobotNode(object):
         hasgreen = np.sum(mask_green)
         hasblue = np.sum(mask_blue)
         found_str = "FOUND "
-        msg = lambda x: f"{self.ID}:{found_str}{x}"
+        msg = lambda x: f"{self.ID};{found_str}{x}"
         if hasred > 0:
-            self._robot_status.publish(msg("red"))
+            self.seeker_publisher.publish(msg("red"))
 
         if haspurple > 0:
-            self._robot_status.publish(msg("purple"))
+            self.seeker_publisher.publish(msg("purple"))
 
         if hasgreen > 0:
-            self._robot_status.publish(msg("green"))
+            self.seeker_publisher.publish(msg("green"))
 
         if hasblue > 0:
-            self._robot_status.publish(msg("blue"))
-
+            self.seeker_publisher.publish(msg("blue"))
          
 if __name__ == '__main__':
     # --- Main Program  ---

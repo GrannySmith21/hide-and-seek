@@ -53,7 +53,7 @@ class PathPlanner:
 
             # timeout
             elapsed = time.time() - t1
-            if elapsed > 2:
+            if elapsed > 1:
                 raise
 
             if iteration % self.biais == 0:
