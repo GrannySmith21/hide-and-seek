@@ -6,31 +6,79 @@ import random
 import sys
 import genpy
 import struct
-import rospy
+import os
+import rospy, time
 from geometry_msgs.msg import Twist, Pose
 from node import RobotNode
+from std_msgs.msg import String
 from nav_msgs.msg import OccupancyGrid
+
+"""Robot Class
+This wraps the RobotNode class, adding additional useful information
+"""
+class Robot():
+        """ constructor
+        args:
+            robotnode - RobotNode object of Robot
+            color - color of robot
+            position - starting position of robot
+        """
+        def __init__(self, robotnode, color, position):
+            self.node = robotnode
+            self.color = color
+            self.starting_position = position
+            self.ID = self.node.ID
+            self.found = False
+            self.arrived = False
+        """ begin function
+        facilitates calling robot's begin function
+        """
+        def begin(self, pose):
+            self.node.begin(pose)
+
+""" GameManager
+This class is responsible for creating setting up and running games
+"""
 class GameManager():
 
-    def __init__(self, hidingSpots =[(1.984, -11.89), (3.05, -7.99),( 10.62, 0.11),(6.56, -1.50), (1.96, -5.11), (1.02, -1.76), (1.94, 5.77), (-3.74, 1.00),
-                                   (-4.1, 3.63), (-5.78, 5.05), (-8.773, 5.57), (-17.09, 5.854), (-12.80, 7.377),
-                                   (-6.14, 11.21), (-9.35, 12.85), (-4.31, 15.46)], 
-                                   no_of_hiders = 2, no_of_seekers = 1):
-        
+    """constructor
+    args:
+        hidingSpots - List of locations
+    Creates Robots based off of "world.meeting" file
+    """
+    def __init__(self, hidingSpots):
+        self.end_of_game = False
         self.hiders_list: list = []
-        self.active_hiders: list = []
-        self.seekers_list = []
-        self.no_of_seekers: int = no_of_seekers
-        self.no_of_hiders: int = no_of_hiders
+        self.seeker = None
         self.hiding_spots: list = hidingSpots
         self.occupied_hiding_spots: list = []
-
+        self._setup_list_of_players()
         
+    """ get active robots
+    return:
+        List of robots
+    Helper function, gets active robots in hiders list
+    """
+    def get_active_robots(self):
+        return [x for x in self.hiders_list if not x.found]
+    """get colors
+    args:
+        r - List of Robots
+    returns:
+        List of strings, colors
+    Gets all the colors in a list of robots    
+    """
+    def get_colors(self, r):
+        return [x.color.upper() for x in r]
 
-    def _get_list_of_active_players(self):
-        return self.active_hiders
-
+    """setup list of players
+    Creates all hiders and 1 seeker. Uses information in meeting.world
+    """
     def _setup_list_of_players(self):
+        # Get robot positions and colors from world file
+        robot_positions, robot_colors = self.get_robot_world_info()
+
+        # Get occupancy map
         rospy.loginfo("Waiting for a map...")
         try:
             ocuccupancy_map = rospy.wait_for_message("/map", OccupancyGrid, 20)
@@ -38,75 +86,157 @@ class GameManager():
             rospy.logerr(f"Problem getting a map. Check that you have a map_server"
                      f" running: rosrun map_server map_server <mapname> {e}" )
             sys.exit(1)
-        for i in range(self.no_of_hiders):
+        
+        # loop through each pioneer in world file, -1 (the last one will be a seeker)
+        for i in range(len(robot_positions)-1):
             chosen = self.find_position_to_hide()
+            # need to convert into index coordinate system
             rob_hiding_spot = self.stage_ros_to_map_conversion(chosen)
-            print(rob_hiding_spot, chosen)
-            self.hiders_list.append(RobotNode(i, ocuccupancy_map, goal = rob_hiding_spot))
+            # use index of for loop as ID for robot (ensures unique)
+            rnode = RobotNode(i, ocuccupancy_map, goal = rob_hiding_spot)
             
-        #To do: set up seekers, make Robot seeker
+            robot = Robot(rnode, robot_colors[i], robot_positions[i])
             
-        self.active_hiders = self.hiders_list
+            self.hiders_list.append(robot)
+        # This ID needs to be +1 from last ID in hiders list  
+        i = len(self.hiders_list)
+
+        rnode = RobotNode(i, ocuccupancy_map)
+        self.seeker = Robot(rnode, robot_colors[i], robot_positions[i])
+    
+    """ stage_ros to index map conversion
+    args:
+        coords - tuple coordinates in stage_ros system to convert
+    returns:
+        tuple of coordinates in index system
+    """
     def stage_ros_to_map_conversion(self, coords):
         x,y = coords
         coords_l = 620
         map_l = 30.0
         c = coords_l/map_l
-        print(coords)
         return (round(c * (x+15 ) ),round(c * (y+15 )))
-    def _player_caught(self, playerId: int):
-        for robot in self.active_hiders:
-            if playerId == robot.id:
-                print("Player", playerId, "Caught At")
-                print(robot.hiding_spot.coordinate.x, ",", robot.hiding_spot.coordinate.y)
-                self.active_hiders.pop(self.active_hiders.index(robot))
-                break
-                ## rose topic player eliminated
-        self._check_if_game_over()
 
-    def _check_if_game_over(self):
-        if len(self.active_hiders) == 1:
-            print("Game Over")
-        else:
-            print(len(self.active_hiders), "Players Still Left")
-
+    """ find position to hide
+    returns:
+        tuple coordinates of a hiding spot
+    moves a hiding spot from the list of hiding spots to the list of occupied spots, returns spot.
+    """
     def find_position_to_hide(self):
-        hiding_spot = self.hiding_spots.pop(random.randrange(0, len(self.hiding_spots)))
+        return self.hiding_spots.pop(0)
+        '''hiding_spot = self.hiding_spots.pop(random.randrange(0, len(self.hiding_spots)))
         self.occupied_hiding_spots.append(hiding_spot)
-        return hiding_spot
+        return hiding_spot'''
+    """ get hider by ID
+    returns - if ID exists in hiders list:
+                Robot
+            - else
+                None
+    """
+    def get_hider_by_ID(self, ID):
+        for r in self.hiders_list:
+            if r.ID == int(ID):
+                return r
+        return None
+    """
 
-    def restart_game(self):
-        self.no_of_players
+    """
+    def get_not_hidden_hiders(self):
+        return [r for r in self.hiders_list if not r.arrived]
+
+    def get_robot_from_color(self, color):
+        for r in self.hiders_list:
+            if r.color == color:
+                return r
+        return None
+   """seeker subscriber
+   Handles seeker rostopic
+   """
+    def seeker_subscriber(self, data):
+        _, msg = data.data.split(";")
+        found_str = "FOUND "
+        # check if seeker has reported that it found a robot
+        if msg.upper().startswith(found_str):
+            color = msg[len(found_str):].upper()
+            # check if in active hiders list
+            if color in self.get_colors(self.get_active_robots()):
+                # mark robot as found, then check for end of game
+
+                self.get_robot_from_color(color).found = True
+                print("FOUND " + color)
+                if len(self.get_active_robots()) ==0 :
+                    print("END OF GAME - Seeker won!")
+                    quit()
+                    sys.exit(0)            
+    """ robot subscriber
+    Handles hider topic
+    """
+    def robot_subscriber(self, data):
+        ID, msg = data.data.split(";")
+        #ignore seeker messages. TODO: make seeker not have this topic
+        if int(ID) == self.seeker.ID:
+            return
+        # check if arrived message recieved
+        arrived_str = "ARRIVED"
+        if msg.upper()==arrived_str:
+            self.get_hider_by_ID(ID).arrived = True
+            if len(self.get_not_hidden_hiders()) == 0:
+                # if all hiders are hidden, start seeker
+                self.start_seeker()
+    """start seeker
+    Initiate seeker
+    """
+    def start_seeker(self):
+        print("STARTING SEEKER")
+        # list of spots the seeker will navigate to
+        seeker_spots = [
+            (-2, 1), (0.5, -3.5), (4, -12),(12,-3), (-3, 12), (-13,3), (-6,3)
+        ]
+        seeker_spots = list(map(self.stage_ros_to_map_conversion, seeker_spots))
+
+        self.seeker.node.start_seeker(seeker_spots)
+        rospy.Subscriber(f'/robot_{self.seeker.ID}/seeker', String, self.seeker_subscriber)
+    
+    """ get_robot_world_info
+    Scrapes .world file, pulls color and position information about each robot
+    """
+    def get_robot_world_info(self):
+        this_file = os.path.dirname(os.path.abspath(__file__))
+        # divide the file by lines
+        f = open(this_file+"/../data/sim_data/meeting.world", "r").read().split('\n')
+        robot_string = "pioneer"
+        # remove all lines other than pioneer lines
+        robot_strings = list(filter(lambda x: x.startswith(robot_string), f))
+        positions = []
+        colors = []
+        for r in robot_strings:
+            # pulls out starting coords 
+            x, y,_,_ = r[r.index("[")+1:r.index("]")].strip().split(" ")
+            positions.append((float(x)+15, float(y)+15))
+            #pulls out color
+            color = r[r.index("color")+5:r.index(")")].strip()[1:-1]
+            colors.append(color.upper())
+        return positions ,colors
+    """run
+    Lets each hider begin hiding, subscribes to all hiders
+    """
     def run(self):
-        for robot in self.hiders_list:
+        for robot in self.hiders_list + [self.seeker]:
             p = Pose()
-            x,y = 23, 7
+            x,y =robot.starting_position
             p.position.x = x
             p.position.y = y
             robot.begin(p)
-            print(robot)
-        # subscribe to all robots
-
+            rospy.Subscriber(f"/robot_{robot.ID}/status", String, self.robot_subscriber)
+        # set path to hiding spot
+        for robot in self.hiders_list:
+            robot.node.set_path(robot.node.goal)
+        
+# entry point to program, iniate game manager and run
 if __name__=="__main__":
     rospy.init_node("game")
-    game= GameManager(hidingSpots= [(-3,2),(-13, 3), (12,-3),(-3, 12) , (4,-12) ])
-    game._setup_list_of_players()
+    game= GameManager(hidingSpots= [(-3,2),(12,-3),(4,-12),(-13, 3), (-3, 12) ,  ])#[(-3,2),(-13, 3), (12,-3),(-3, 12) , (4,-12) ])
     game.run()
     rospy.spin()
 
-'''
-## Debug Code for Game Manager
-hidingspots = []
-for i in range(15):
-    hidingspots.append(HidingSpot(Cord(random.randrange(0,602), random.randrange(0,602)), False))
-print(len(hidingspots))
-a = GameManger(hidingspots)
-a._setup_list_of_players()
-print("Seeker", a.seeker.id)
-a._player_caught(4)
-a._player_caught(6)
-a._player_caught(2)
 
-'''
-
-## 602
